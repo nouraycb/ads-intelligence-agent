@@ -1,4 +1,6 @@
 gradio==4.44.0
-pandas
+pandas==2.3.3
 python-dotenv==1.0.1
 openai==1.51.0
+reportlab
+huggingface_hub==0.24.6
