@@ -1,123 +1,211 @@
 import os
 import pandas as pd
 import gradio as gr
+from reportlab.lib.pagesizes import LETTER
+from reportlab.pdfgen import canvas
+from datetime import datetime
 
+# =====================================================
+#             COLUMN AUTO-DETECTION
+# =====================================================
 
-def analyze_ads_report(file):
-    """
-    Simple MVP:
-    - Reads the CSV
-    - Tries to detect standard Amazon Ads columns
-    - Computes core KPIs and returns a summary
-    """
+def find_col(df, options):
+    for col in df.columns:
+        clean = col.strip().lower()
+        for opt in options:
+            if clean == opt.strip().lower():
+                return col
+    return None
+
+# =====================================================
+#           STRATEGIST ENGINE
+# =====================================================
+
+def analyze_ads_report(file, waste_spend, target_acos, min_clicks, min_orders, min_ctr, min_cvr):
 
     if file is None:
-        return "No file uploaded yet."
+        return "Upload your Amazon Ads CSV to begin.", "", pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), None
 
-    # Try to read the CSV file
-    try:
-        df = pd.read_csv(file.name)
-    except Exception as e:
-        return f"Error reading CSV: {e}"
+    df = pd.read_csv(file.name)
 
-    # Helper to find the first matching column name from a list
-    def find_column(possible_names):
-        for name in possible_names:
-            if name in df.columns:
-                return name
-        return None
+    # ---------- AUTO DETECT ----------
+    term = find_col(df, ["matched product", "customer search term", "search term"])
+    match_type = find_col(df, ["product targets", "match type", "targeting"])
+    added = find_col(df, ["added as"])
+    impressions = find_col(df, ["impressions"])
+    clicks = find_col(df, ["clicks"])
+    ctr = find_col(df, ["ctr"])
+    spend = find_col(df, ["spend(usd)", "spend", "cost"])
+    cpc = find_col(df, ["cpc(usd)", "cpc"])
+    orders = find_col(df, ["orders"])
+    sales = find_col(df, ["sales(usd)", "sales"])
+    acos = find_col(df, ["acos"])
+    roas = find_col(df, ["roas"])
+    cvr = find_col(df, ["conversion rate", "cvr"])
 
-    # Try to map likely column names (we can extend this as needed)
-    impressions_col = find_column([
-        "Impressions", "impressions", "impr", "impressions_total"
-    ])
-    clicks_col = find_column([
-        "Clicks", "clicks", "clicks_total"
-    ])
-    cost_col = find_column([
-        "Spend", "spend", "Cost", "cost", "Ad Spend", "Ad spend", "Total Spend"
-    ])
-    sales_col = find_column([
-        "Sales", "sales", "Revenue", "revenue", "Total Sales", "total_sales",
-        "7 Day Total Sales", "14 Day Total Sales"
-    ])
+    required = [term, impressions, clicks, spend, orders, sales]
+    if any([r is None for r in required]):
+        return f"❌ COLUMN ERROR. Found:\n\n{df.columns.tolist()}", "", pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), None
 
-    # Check what we're missing
-    missing = []
-    if impressions_col is None:
-        missing.append("Impressions")
-    if clicks_col is None:
-        missing.append("Clicks")
-    if cost_col is None:
-        missing.append("Spend/Cost")
-    if sales_col is None:
-        missing.append("Sales/Revenue")
+    # ---------- TYPE CLEAN ----------
+    numeric = [impressions, clicks, spend, cpc, orders, sales, acos, roas, ctr, cvr]
+    for col in numeric:
+        if col:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
-    if missing:
-        return (
-            "Missing columns in file: " + ", ".join(missing)
-            + "\n\nColumns present in your file are:\n"
-            + ", ".join(df.columns.astype(str))
-            + "\n\nTell me the exact column names for impressions, clicks, spend, and sales, and "
-              "I can update the mapping for you."
-        )
+    df["Recommendation"] = "MONITOR"
+    df["Reason"] = ""
 
-    # Convert key columns to numeric safely
-    df[impressions_col] = pd.to_numeric(df[impressions_col], errors="coerce").fillna(0)
-    df[clicks_col] = pd.to_numeric(df[clicks_col], errors="coerce").fillna(0)
-    df[cost_col] = pd.to_numeric(df[cost_col], errors="coerce").fillna(0)
-    df[sales_col] = pd.to_numeric(df[sales_col], errors="coerce").fillna(0)
+    # NEGATE
+    negate = (df[spend] >= waste_spend) & (df[orders] == 0) & (df[clicks] >= min_clicks)
+    df.loc[negate, "Recommendation"] = "NEGATE"
+    df.loc[negate, "Reason"] = "Spend with no orders"
 
-    # Aggregate totals
-    total_impressions = df[impressions_col].sum()
-    total_clicks = df[clicks_col].sum()
-    total_cost = df[cost_col].sum()
-    total_sales = df[sales_col].sum()
+    # LOWER BID
+    lower = (df["Recommendation"] == "MONITOR") & (df[orders] > 0) & (df[acos] > target_acos)
+    df.loc[lower, "Recommendation"] = "LOWER BID"
+    df.loc[lower, "Reason"] = "ACOS above goal"
 
-    # Compute KPIs
-    ctr = (total_clicks / total_impressions * 100) if total_impressions > 0 else 0
-    cpc = (total_cost / total_clicks) if total_clicks > 0 else 0
-    acos = (total_cost / total_sales * 100) if total_sales > 0 else 0
-    roas = (total_sales / total_cost) if total_cost > 0 else 0
+    # SCALE
+    scale = (
+        (df["Recommendation"] == "MONITOR") &
+        (df[orders] >= min_orders) &
+        (df[acos] <= target_acos) &
+        (df[cvr] >= min_cvr) &
+        (df[ctr] >= min_ctr)
+    )
+    df.loc[scale, "Recommendation"] = "SCALE"
+    df.loc[scale, "Reason"] = "Profitable + strong conversion"
 
-    summary_lines = []
-    summary_lines.append("📊 AMAZON ADS SUMMARY\n")
-    summary_lines.append(f"Total Impressions: {int(total_impressions):,}")
-    summary_lines.append(f"Total Clicks: {int(total_clicks):,}")
-    summary_lines.append(f"Total Spend: ${total_cost:,.2f}")
-    summary_lines.append(f"Total Sales: ${total_sales:,.2f}")
-    summary_lines.append("")
-    summary_lines.append(f"CTR: {ctr:.2f}%")
-    summary_lines.append(f"CPC: ${cpc:.2f}")
-    summary_lines.append(f"ACOS: {acos:.2f}%")
-    summary_lines.append(f"ROAS: {roas:.2f}x")
-    summary_lines.append("\n✅ MVP is working. Next steps will be:")
-    summary_lines.append("- Add wasted spend detection (keywords with spend and no sales)")
-    summary_lines.append("- Add scaling opportunities")
-    summary_lines.append("- Add AI summary & recommendations")
+    # PROMOTE
+    promote = (
+        (df["Recommendation"] == "MONITOR") &
+        (df[orders] >= min_orders) &
+        (df[acos] <= target_acos) &
+        (df[added].isna())
+    )
+    df.loc[promote, "Recommendation"] = "PROMOTE"
+    df.loc[promote, "Reason"] = "Winner not yet added"
 
-    return "\n".join(summary_lines)
+    # DISPLAY
+    display_cols = [term, match_type, added, impressions, clicks, spend, cpc, orders, sales, acos, roas, ctr, cvr, "Recommendation", "Reason"]
+    display_cols = [d for d in display_cols if d]
+    display_df = df[display_cols].sort_values(spend, ascending=False)
+
+    wasted = display_df[display_df["Recommendation"] == "NEGATE"]
+    scaled = display_df[display_df["Recommendation"] == "SCALE"]
+
+    # =====================================================
+    # EXECUTIVE SUMMARY
+    # =====================================================
+
+    total_spend = df[spend].sum()
+    total_sales = df[sales].sum()
+    acos_total = (total_spend / total_sales * 100) if total_sales else 0
+    roas_total = (total_sales / total_spend) if total_spend else 0
+
+    exec_summary = f"""
+EXECUTIVE PERFORMANCE SUMMARY
+
+Reporting Date: {datetime.now().strftime('%Y-%m-%d')}
+
+Total Spend: ${total_spend:,.2f}
+Total Sales: ${total_sales:,.2f}
+ROAS: {roas_total:.2f}x
+ACOS: {acos_total:.2f}%
+
+Operational Risk:
+• {(wasted.shape[0])} search terms wasting spend
+• {(display_df['Recommendation']=='LOWER BID').sum()} terms inefficient
+• {(display_df['Recommendation']=='SCALE').sum()} scalable winners
+
+Strategic Actions:
+1. Cut waste immediately (NEGATE list)
+2. Reduce bids on inefficiencies
+3. Increase exposure on winners
+4. Promote profitable queries into exact match
+    """
+
+    # =====================================================
+    # EXPORT FILES
+    # =====================================================
+
+    base_dir = os.getcwd()  # current project directory
+
+    csv_path = os.path.join(base_dir, "amazon_analysis.csv")
+    pdf_path = os.path.join(base_dir, "executive_summary.pdf")
+
+    display_df.to_csv(csv_path, index=False)
+
+    create_pdf(exec_summary, pdf_path)
+
+    return exec_summary, csv_path, wasted, scaled, display_df, pdf_path
 
 
-# ---------- GRADIO UI ----------
+# =====================================================
+#               PDF GENERATOR
+# =====================================================
 
-with gr.Blocks(title="Amazon Ads Intelligence MVP") as app:
-    gr.Markdown("# Amazon Ads Intelligence MVP")
-    gr.Markdown(
-        "Upload an Amazon Ads CSV and I'll compute core KPIs like impressions, "
-        "clicks, spend, sales, ACOS, and ROAS."
+def create_pdf(text, path):
+    c = canvas.Canvas(path, pagesize=LETTER)
+    width, height = LETTER
+    y = height - 40
+
+    for line in text.split("\n"):
+        c.drawString(40, y, line)
+        y -= 14
+        if y <= 40:
+            c.showPage()
+            y = height - 40
+
+    c.save()
+
+
+# =====================================================
+#                     UI
+# =====================================================
+
+with gr.Blocks(title="Amazon Ads Intelligence System") as app:
+
+    gr.Markdown("# Amazon Ads Intelligence System")
+    gr.Markdown("Executive + Strategic Analysis Platform")
+
+    with gr.Row():
+        file = gr.File(label="Upload Amazon Report")
+        waste = gr.Number(label="NEGATE Spend Threshold", value=5)
+        target = gr.Number(label="Target ACOS", value=30)
+
+    with gr.Row():
+        clicks = gr.Number(label="Min Clicks", value=10)
+        orders = gr.Number(label="Min Orders", value=3)
+        ctr = gr.Number(label="Min CTR %", value=0.3)
+        cvr = gr.Number(label="Min CVR %", value=10)
+
+    run = gr.Button("Run Intelligence Audit", variant="primary")
+
+    with gr.Tab("🏢 Executive Summary"):
+        exec_box = gr.Textbox(lines=18)
+        pdf_out = gr.File(label="Download Executive PDF")
+
+    with gr.Tab("📁 Export"):
+        csv_out = gr.File(label="Download Full CSV")
+
+    with gr.Tab("❌ NEGATE"):
+        wasted_tbl = gr.DataFrame()
+
+    with gr.Tab("✅ SCALE"):
+        scale_tbl = gr.DataFrame()
+
+    with gr.Tab("📊 All Actions"):
+        full_tbl = gr.DataFrame()
+
+    run.click(
+        analyze_ads_report,
+        inputs=[file, waste, target, clicks, orders, ctr, cvr],
+        outputs=[exec_box, csv_out, wasted_tbl, scale_tbl, full_tbl, pdf_out]
     )
 
-    file_input = gr.File(label="Upload Amazon Ads CSV")
-    output_box = gr.Textbox(label="Analysis", lines=20)
-
-    analyze_button = gr.Button("Analyze Report")
-    analyze_button.click(
-        fn=analyze_ads_report,
-        inputs=file_input,
-        outputs=output_box,
-    )
-
+# =====================================================
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 7860))
