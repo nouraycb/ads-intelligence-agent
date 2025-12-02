@@ -195,7 +195,7 @@ def create_pdf(text, path):
 #                     UI
 # =====================================================
 
-with gr.Blocks(title="Amazon Ads Intelligence System", show_api=False) as app:
+with gr.Blocks(title="Amazon Ads Intelligence System") as app:
 
     gr.Markdown("# Amazon Ads Intelligence System")
     gr.Markdown("Executive + Strategic Analysis Platform")
