@@ -195,7 +195,7 @@ def create_pdf(text, path):
 #                     UI
 # =====================================================
 
-with gr.Blocks(title="Amazon Ads Intelligence System") as app:
+with gr.Blocks(title="Amazon Ads Intelligence System", show_api=False) as app:
 
     gr.Markdown("# Amazon Ads Intelligence System")
     gr.Markdown("Executive + Strategic Analysis Platform")
@@ -239,4 +239,4 @@ with gr.Blocks(title="Amazon Ads Intelligence System") as app:
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 7860))
-    app.launch(server_name="0.0.0.0", server_port=port)
+    app.launch(server_name="0.0.0.0", server_port=port, share=True)
