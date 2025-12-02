@@ -49,10 +49,6 @@ def find_col(df, options):
 
 def analyze_ads_report(file, waste_spend, target_acos, min_clicks, min_orders, min_ctr, min_cvr):
 
-    metrics_text = exec_summary  # the basic numeric summary we already build
-    ai_exec_summary = generate_ai_exec_summary(metrics_text)
-    return ai_exec_summary, csv_path, wasted, scaled, display_df, pdf_path
-
     if file is None:
         return "Upload your Amazon Ads CSV to begin.", "", pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), None
 
@@ -156,6 +152,9 @@ Strategic Actions:
 4. Promote profitable queries into exact match
     """
 
+    ai_exec_summary = generate_ai_exec_summary(exec_summary)
+
+
     # =====================================================
     # EXPORT FILES
     # =====================================================
@@ -169,7 +168,7 @@ Strategic Actions:
 
     create_pdf(exec_summary, pdf_path)
 
-    return exec_summary, csv_path, wasted, scaled, display_df, pdf_path
+    return ai_exec_summary, csv_path, wasted, scaled, display_df, pdf_path
 
 
 # =====================================================
